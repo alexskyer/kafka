@@ -103,8 +103,10 @@ public class KafkaChannel {
     }
 
     public boolean finishConnect() throws IOException {
+        // 返回true代表已经连接好了
         boolean connected = transportLayer.finishConnect();
         if (connected)
+            // 取消监听CONNECt事件，增加READ事件的监听
             state = ready() ? ChannelState.READY : ChannelState.AUTHENTICATE;
         return connected;
     }
@@ -180,9 +182,12 @@ public class KafkaChannel {
     }
 
     public void setSend(Send send) {
+        // 如果还有数据没有发送出去则报错
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress, connection id is " + id);
+        // 保存下来
         this.send = send;
+        // 添加对WRITE事件的监听
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 

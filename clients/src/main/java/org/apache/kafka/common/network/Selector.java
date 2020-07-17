@@ -196,16 +196,24 @@ public class Selector implements Selectable, AutoCloseable {
     @Override
     public void connect(String id, InetSocketAddress address, int sendBufferSize, int receiveBufferSize) throws IOException {
         ensureNotRegistered(id);
+        // 创建一个SocketChannel
         SocketChannel socketChannel = SocketChannel.open();
         try {
+            //设置为非阴塞模式、创建socket并设置相关属性
             configureSocketChannel(socketChannel, sendBufferSize, receiveBufferSize);
+            // 调用SocketChannel的connect方法，该方法会向远端发起tcp建连请求
+            // 因为是非阻塞的，所以该方法返回时，连接不一定已经建立好（即完成3次握手）。连接如果已经建立好则返回true，否则返回false。
+            // 一般来说server和client在一台机器上，该方法可能返回true。
             boolean connected = doConnect(socketChannel, address);
+            // 对CONNECT事件进行注册
             SelectionKey key = registerChannel(id, socketChannel, SelectionKey.OP_CONNECT);
-
+            // connectct为true代表该连接不会再触发CONNECT事件，所以这里要单独处理
             if (connected) {
                 // OP_CONNECT won't trigger for immediately connected channels
                 log.debug("Immediately connected to node {}", id);
+                // 加入到一个单独的集合中
                 immediatelyConnectedKeys.add(key);
+                // 取消对该连接的CONNECT事件的监听
                 key.interestOps(0);
             }
         } catch (IOException | RuntimeException e) {
@@ -226,7 +234,9 @@ public class Selector implements Selectable, AutoCloseable {
 
     private void configureSocketChannel(SocketChannel socketChannel, int sendBufferSize, int receiveBufferSize)
             throws IOException {
+        // 设置为非阻塞模式
         socketChannel.configureBlocking(false);
+        // 创建socket
         Socket socket = socketChannel.socket();
         socket.setKeepAlive(true);
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
@@ -264,14 +274,18 @@ public class Selector implements Selectable, AutoCloseable {
 
     private SelectionKey registerChannel(String id, SocketChannel socketChannel, int interestedOps) throws IOException {
         SelectionKey key = socketChannel.register(nioSelector, interestedOps);
+        // 构造一个KafkaChannel并将kafkachannel绑定到SelectionKey上
         KafkaChannel channel = buildAndAttachKafkaChannel(socketChannel, id, key);
+        // 放入到map中，id是远端服务器的名称
         this.channels.put(id, channel);
         return key;
     }
 
     private KafkaChannel buildAndAttachKafkaChannel(SocketChannel socketChannel, String id, SelectionKey key) throws IOException {
         try {
+            // 构造一个KafkaChannel
             KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize, memoryPool);
+            //将kafkachannel绑定到SelectionKey上
             key.attach(channel);
             return channel;
         } catch (Exception e) {
@@ -316,6 +330,7 @@ public class Selector implements Selectable, AutoCloseable {
     public void send(Send send) {
         String connectionId = send.destination();
         KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
+        // 如果所在的连接正在关闭中，则加入到失败集合failedSends中
         if (closingChannels.containsKey(connectionId)) {
             // ensure notification via `disconnected`, leave channel in the state in which closing was triggered
             this.failedSends.add(connectionId);
@@ -409,10 +424,12 @@ public class Selector implements Selectable, AutoCloseable {
             }
 
             // Poll from channels where the underlying socket has more data
+            // 对已就绪的事件进行处理，第2个参数为false
             pollSelectionKeys(readyKeys, false, endSelect);
             // Clear all selected keys so that they are included in the ready count for the next select
             readyKeys.clear();
 
+            // 对immediatelyConnectedKeys进行处理。第2个参数为true
             pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
             immediatelyConnectedKeys.clear();
         } else {
@@ -441,7 +458,9 @@ public class Selector implements Selectable, AutoCloseable {
     void pollSelectionKeys(Set<SelectionKey> selectionKeys,
                            boolean isImmediatelyConnected,
                            long currentTimeNanos) {
+        // 遍历集合
         for (SelectionKey key : determineHandlingOrder(selectionKeys)) {
+            // 得到connect时创建的KafkaChannel
             KafkaChannel channel = channel(key);
             long channelStartTimeNanos = recordTimePerConnection ? time.nanoseconds() : 0;
 
@@ -454,7 +473,10 @@ public class Selector implements Selectable, AutoCloseable {
             try {
 
                 /* complete any connections that have finished their handshake (either normally or immediately) */
+                // 如果当前处理的是immediatelyConnectedKeys集合的元素或处理的是CONNECT事件
                 if (isImmediatelyConnected || key.isConnectable()) {
+                    // finishconnect中会增加READ事件的监听
+                    // 因为immediatelyConnectedKeys中的连接不会触发CONNNECT事件，所以在poll时会单独对immediatelyConnectedKeys的channel调用finishConnect方法。在明文传输模式下该方法会调用到PlaintextTransportLayer#finishConnect
                     if (channel.finishConnect()) {
                         this.connected.add(channel.id());
                         this.sensors.connectionCreated.record();
@@ -493,21 +515,26 @@ public class Selector implements Selectable, AutoCloseable {
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
+                // 如果是WRITE事件
                 if (channel.ready() && key.isWritable()) {
                     Send send = null;
                     try {
+                        // 真正的网络写
                         send = channel.write();
                     } catch (Exception e) {
                         sendFailed = true;
                         throw e;
                     }
+                    // 一个Send对象可能会被拆成几次发送，write非空代表一个send发送完成
                     if (send != null) {
+                        // completedSends代表已发送完成的集合
                         this.completedSends.add(send);
                         this.sensors.recordBytesSent(channel.id(), send.size());
                     }
                 }
 
                 /* cancel any defunct sockets */
+                // 如果连接失效
                 if (!key.isValid())
                     close(channel, true, true);
 
