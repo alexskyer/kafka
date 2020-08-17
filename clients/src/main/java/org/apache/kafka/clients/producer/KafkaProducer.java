@@ -804,18 +804,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
+            // 4、确认消息大小是否超过最值（默认1M）
             ensureValidRecordSize(serializedSize);
             long timestamp = record.timestamp() == null ? time.milliseconds() : record.timestamp();
             log.trace("Sending record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
-            // producer callback will make sure to call both 'callback' and interceptor callback
+            // 5、producer callback will make sure to call both 'callback' and interceptor callback
             Callback interceptCallback = this.interceptors == null ? callback : new InterceptorCallback<>(callback, this.interceptors, tp);
 
             if (transactionManager != null && transactionManager.isTransactional())
                 transactionManager.maybeAddPartitionToTransaction(tp);
-            // 4、向accumulator写入数据
+            // 6、向accumulator写入数据（默认32MB，一个recordBatch默认16KB）
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs);
-            //5、如果batch已经满了则唤醒sender线程发送数据
+            //7、如果batch已经满了则唤醒sender线程发送数据
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
                 this.sender.wakeup();
@@ -871,8 +872,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      */
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already and reset expiry
+        // 在 metadata 中添加 topic 后,如果 metadata 中没有这个 topic 的 meta，那么 metadata 的更新标志设置为了 true
         metadata.add(topic);
         Cluster cluster = metadata.fetch();
+        // 如果 topic 已经存在 meta 中,则返回该 topic 的 partition 数,否则返回 null
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
@@ -890,8 +893,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             log.trace("Requesting metadata update for topic {}.", topic);
             metadata.add(topic);
             int version = metadata.requestUpdate();
+            // 唤起 sender，发送 metadata 请求
             sender.wakeup();
             try {
+                // 等待 metadata 的更新
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs

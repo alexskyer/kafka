@@ -454,9 +454,10 @@ public class NetworkClient implements KafkaClient {
             completeResponses(responses);
             return responses;
         }
-
+        // 判断是否需要更新 meta,如果需要就更新（请求更新 metadata 的地方）
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            // 执行网络请求
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -465,7 +466,9 @@ public class NetworkClient implements KafkaClient {
         // process completed actions
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
+        // 通过 selector 中获取 Server 端的 response
         handleCompletedSends(responses, updatedNow);
+        // 在返回的 handler 中，会处理 metadata 的更新
         handleCompletedReceives(responses, updatedNow);
         handleDisconnections(responses, updatedNow);
         handleConnections();
@@ -829,22 +832,26 @@ public class NetworkClient implements KafkaClient {
         @Override
         public long maybeUpdate(long now) {
             // should we update our metadata?
+            // metadata 下次更新的时间（需要判断是强制更新还是 metadata 过期更新,前者是立马更新,后者是计算 metadata 的过期时间）
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
+            // 如果一条 metadata 的 fetch 请求还未从 server 收到回复,那么时间设置为 waitForMetadataFetch（默认30s）
             long waitForMetadataFetch = this.metadataFetchInProgress ? requestTimeoutMs : 0;
 
             long metadataTimeout = Math.max(timeToNextMetadataUpdate, waitForMetadataFetch);
             if (metadataTimeout > 0) {
+                // 时间未到时,直接返回下次应该更新的时间
                 return metadataTimeout;
             }
 
             // Beware that the behavior of this method and the computation of timeouts for poll() are
             // highly dependent on the behavior of leastLoadedNode.
+            // 选择一个连接数最小的节点
             Node node = leastLoadedNode(now);
             if (node == null) {
                 log.debug("Give up sending metadata request since no node is available");
                 return reconnectBackoffMs;
             }
-
+            // 可以发送 metadata 请求的话,就发送 metadata 请求
             return maybeUpdate(now, node);
         }
 
@@ -911,20 +918,25 @@ public class NetworkClient implements KafkaClient {
         /**
          * Add a metadata request to the list of sends if we can make one
          */
+        // 判断是否可以发送请求,可以的话将 metadata 请求加入到发送列表中
         private long maybeUpdate(long now, Node node) {
             String nodeConnectionId = node.idString();
-
+            // 通道已经 ready 并且支持发送更多的请求
             if (canSendRequest(nodeConnectionId)) {
+                // 准备开始发送数据,将 metadataFetchInProgress 置为 true
                 this.metadataFetchInProgress = true;
                 MetadataRequest.Builder metadataRequest;
                 if (metadata.needMetadataForAllTopics())
+                    // 强制更新所有 topic 的 metadata（虽然默认不会更新所有 topic 的 metadata 信息，但是每个 Broker 会保存所有 topic 的 meta 信息）
                     metadataRequest = MetadataRequest.Builder.allTopics();
                 else
+                    // 只更新 metadata 中的 topics 列表（列表中的 topics 由 metadata.add() 得到）
                     metadataRequest = new MetadataRequest.Builder(new ArrayList<>(metadata.topics()),
                             metadata.allowAutoTopicCreation());
 
 
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
+                // 发送 metadata 请求
                 sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
                 return requestTimeoutMs;
             }

@@ -243,9 +243,11 @@ public class Sender implements Runnable {
         Cluster cluster = metadata.fetch();
 
         // get the list of partitions with data ready to send
+        // 获取那些已经可以发送的recordBatch对应的nodes
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        // 如果找不到top partition的leader,则强制更新metadata
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -306,6 +308,7 @@ public class Sender implements Runnable {
             // otherwise the select time will be the time difference between now and the metadata expiry time;
             pollTimeout = 0;
         }
+        // 将归属同一leader的recordBatch发送出去
         sendProduceRequests(batches, now);
 
         return pollTimeout;

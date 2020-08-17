@@ -54,13 +54,16 @@ public final class Metadata {
 
     public static final long TOPIC_EXPIRY_MS = 5 * 60 * 1000;
     private static final long TOPIC_EXPIRY_NEEDS_UPDATE = -1L;
-
+    // metadata更新时间间隔
     private final long refreshBackoffMs;
+    // metadata过期时间
     private final long metadataExpireMs;
+    // 每更新一次元数据，version自增1
     private int version;
     private long lastRefreshMs;
     private long lastSuccessfulRefreshMs;
     private AuthenticationException authenticationException;
+    // topic相关信息（leader 所在节点、replica 所在节点、isr 列表
     private Cluster cluster;
     private boolean needUpdate;
     /* Topics with expiry time */
@@ -69,6 +72,7 @@ public final class Metadata {
     private final ClusterResourceListeners clusterResourceListeners;
     private boolean needMetadataForAllTopics;
     private final boolean allowAutoTopicCreation;
+    // 默认为 true, Producer 会定时移除过期的 topic,consumer 则不会移除
     private final boolean topicExpiryEnabled;
 
     public Metadata(long refreshBackoffMs, long metadataExpireMs, boolean allowAutoTopicCreation) {
