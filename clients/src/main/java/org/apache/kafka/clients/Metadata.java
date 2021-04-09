@@ -173,11 +173,13 @@ public final class Metadata {
         }
         long begin = System.currentTimeMillis();
         long remainingWaitMs = maxWaitMs;
+        //如果此时版本小于等于上次更新版本，则元数据还没更新成功
         while (this.version <= lastVersion) {
             AuthenticationException ex = getAndClearAuthenticationException();
             if (ex != null)
                 throw ex;
             if (remainingWaitMs != 0)
+                //阻塞，等待sender更新完元数据后，唤醒
                 wait(remainingWaitMs);
             long elapsed = System.currentTimeMillis() - begin;
             if (elapsed >= maxWaitMs)

@@ -384,9 +384,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
             this.apiVersions = new ApiVersions();
             this.accumulator = new RecordAccumulator(logContext,
+                    //每个batch大小,默认16KB
                     config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
+                    //缓冲区大小，默认32MB
                     this.totalMemorySize,
                     this.compressionType,
+                    //发送时间
                     config.getLong(ProducerConfig.LINGER_MS_CONFIG),
                     retryBackoffMs,
                     metrics,
@@ -394,6 +397,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     apiVersions,
                     transactionManager);
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG));
+            //更新元数据信息
             this.metadata.update(Cluster.bootstrap(addresses), Collections.<String>emptySet(), time.milliseconds());
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config);
             Sensor throttleTimeSensor = Sender.throttleTimeSensor(metricsRegistry.senderMetrics);
@@ -876,9 +880,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         metadata.add(topic);
         Cluster cluster = metadata.fetch();
         // 如果 topic 已经存在 meta 中,则返回该 topic 的 partition 数,否则返回 null
+        //第一次执行，分区信息为空
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
+        //如果元数据信息（partitionsCount）不为空，直接从缓存中返回
         if (partitionsCount != null && (partition == null || partition < partitionsCount))
             return new ClusterAndWaitTime(cluster, 0);
 
@@ -889,6 +895,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // In case we already have cached metadata for the topic, but the requested partition is greater
         // than expected, issue an update request only once. This is necessary in case the metadata
         // is stale and the number of partitions for this topic has increased in the meantime.
+        //不断尝试拉取元数据信息，直到partitionsCount不为null
         do {
             log.trace("Requesting metadata update for topic {}.", topic);
             metadata.add(topic);

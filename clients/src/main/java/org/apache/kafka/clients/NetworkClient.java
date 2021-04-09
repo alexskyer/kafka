@@ -224,7 +224,7 @@ public class NetworkClient implements KafkaClient {
 
         if (isReady(node, now))
             return true;
-
+        //判断是否可以尝试建立网络连接
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
             initiateConnect(node, now);
@@ -336,6 +336,7 @@ public class NetworkClient implements KafkaClient {
     public boolean isReady(Node node, long now) {
         // if we need to update our metadata now declare all requests unready to make metadata requests first
         // priority
+        //是否正在更新元数据 && 对应的broker是否已建好连接且可以发送数据
         return !metadataUpdater.isUpdateDue(now) && canSendRequest(node.idString());
     }
 
@@ -345,6 +346,7 @@ public class NetworkClient implements KafkaClient {
      * @param node The node
      */
     private boolean canSendRequest(String node) {
+        //生产者缓存中是否有相应node的连接 && selector中是否绑定相应node的channel && 向leader发送数据尝试次数是否在允许范围内
         return connectionStates.isReady(node) && selector.isChannelReady(node) && inFlightRequests.canSendMore(node);
     }
 
@@ -431,6 +433,7 @@ public class NetworkClient implements KafkaClient {
                 request,
                 send,
                 now);
+        //将请求加入到inFlightRequests中
         this.inFlightRequests.add(inFlightRequest);
         selector.send(inFlightRequest.send);
     }
@@ -454,10 +457,10 @@ public class NetworkClient implements KafkaClient {
             completeResponses(responses);
             return responses;
         }
-        // 判断是否需要更新 meta,如果需要就更新（请求更新 metadata 的地方）
+        // 1、判断是否需要更新 meta,如果需要就更新（请求更新 metadata 的地方）
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
-            // 执行网络请求
+            // 2、执行网络请求
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);

@@ -90,13 +90,13 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
     this.synchronized {
 
       connectionQuotas = new ConnectionQuotas(maxConnectionsPerIp, maxConnectionsPerIpOverrides)
-
+      //socker接受发送缓冲区
       val sendBufferSize = config.socketSendBufferBytes
       val recvBufferSize = config.socketReceiveBufferBytes
       val brokerId = config.brokerId
 
       var processorBeginIndex = 0
-      // 根据配置 listeners = PLAINTEXT://your.host.name:9092，配置协议、端口
+      // 根据配置 listeners = PLAINTEXT://your.host.name:9092，配置协议、端口，一台服务器可配置多个kafka实例
       config.listeners.foreach { endpoint =>
         val listenerName = endpoint.listenerName
         val securityProtocol = endpoint.securityProtocol
@@ -104,10 +104,11 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
         // 创建processor线程，线程数根据配置num.network.threads决定
         for (i <- processorBeginIndex until processorEndIndex)
           processors(i) = newProcessor(i, connectionQuotas, listenerName, securityProtocol, memoryPool)
-        // 创建一个acceptor线程
+        // 创建一个acceptor线程，监听客户端请求，将socketChannel,以轮询的方式交给processor
         val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId,
           processors.slice(processorBeginIndex, processorEndIndex), connectionQuotas)
         acceptors.put(endpoint, acceptor)
+        //通过kafkaThread来启动acceptor
         KafkaThread.nonDaemon(s"kafka-socket-acceptor-$listenerName-$securityProtocol-${endpoint.port}", acceptor).start()
         acceptor.awaitStartup()
 
@@ -289,8 +290,9 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                               brokerId: Int,
                               processors: Array[Processor],
                               connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
-
+  // 1、创建多路复用器selector
   private val nioSelector = NSelector.open()
+  // 2、构建socketChannel
   val serverChannel = openServerSocket(endPoint.host, endPoint.port)
   private val processorsStarted = new AtomicBoolean
 
@@ -307,24 +309,26 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
    * Accept loop that checks for new connection attempts
    */
   def run() {
-    // 注册OP_ACCEPT事件
+    // 3、注册OP_ACCEPT事件
     serverChannel.register(nioSelector, SelectionKey.OP_ACCEPT)
     startupComplete()
     try {
       var currentProcessor = 0
-      // 以轮询方式查询并等待关注的事件发生
+      // 4、以轮询方式查询并等待关注的事件发生
       while (isRunning) {
         try {
+          // 5、每隔500毫秒获取所有注册的key
           val ready = nioSelector.select(500)
           if (ready > 0) {
             val keys = nioSelector.selectedKeys()
+            // 6、迭代keys
             val iter = keys.iterator()
             while (iter.hasNext && isRunning) {
               try {
                 val key = iter.next
                 iter.remove()
                 if (key.isAcceptable)
-                  // 如果事件发生则调用accept方法对OP_ACCEPT事件处理
+                  // 7、如果事件发生则调用accept方法对OP_ACCEPT事件处理
                   accept(key, processors(currentProcessor))
                 else
                   throw new IllegalStateException("Unrecognized key state for acceptor thread.")
@@ -399,7 +403,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
             .format(socketChannel.socket.getRemoteSocketAddress, socketChannel.socket.getLocalSocketAddress, processor.id,
                   socketChannel.socket.getSendBufferSize, sendBufferSize,
                   socketChannel.socket.getReceiveBufferSize, recvBufferSize))
-      // 5、调用processor.accept()
+      // 5、调用processor.accept()，将socketChanner交给process
       processor.accept(socketChannel)
     } catch {
       case e: TooManyConnectionsException =>
@@ -497,7 +501,7 @@ private[kafka] class Processor(val id: Int,
           // 1、取出队列中的每个socketChannel并将其在selector上注册OP_READ事件
           configureNewConnections()
           // register any new responses for writing
-          // 2、处理RequestChannel中与当前Processor对应响应队列中的Response
+          // 2、处理RequestChannel中与当前Processor对应响应队列中的Response并注册OP_WRITE事件
           processNewResponses()
           // 3、调用selector.poll()方法进行处理。该方法底层即为调用nioSelector.select()方法进行处理
           poll()
@@ -696,6 +700,7 @@ private[kafka] class Processor(val id: Int,
       val channel = newConnections.poll()
       try {
         debug(s"Processor $id listening to new connection from ${channel.socket.getRemoteSocketAddress}")
+        //监听socketChannel OP_READER事件
         selector.register(connectionId(channel.socket), channel)
       } catch {
         // We explicitly catch all exceptions and close the socket to avoid a socket leak.

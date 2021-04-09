@@ -240,14 +240,15 @@ public class Sender implements Runnable {
     }
 
     private long sendProducerData(long now) {
+        //1、获取元数据
         Cluster cluster = metadata.fetch();
 
         // get the list of partitions with data ready to send
-        // 获取那些已经可以发送的recordBatch对应的nodes
+        // 2、获取那些已经可以发送的recordBatch对应的nodes
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
-        // 如果找不到top partition的leader,则强制更新metadata
+        // 3、如果找不到top partition的leader,则强制更新metadata
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -258,6 +259,7 @@ public class Sender implements Runnable {
         }
 
         // remove any nodes we aren't ready to send to
+        //4、发送数据前，遍历所有网络节点，如果没建好，则remove
         Iterator<Node> iter = result.readyNodes.iterator();
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
@@ -269,6 +271,7 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
+        // 5、按brokerid分组
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes,
                 this.maxRequestSize, now);
         if (guaranteeMessageOrder) {
@@ -278,7 +281,7 @@ public class Sender implements Runnable {
                     this.accumulator.mutePartition(batch.topicPartition);
             }
         }
-
+        // 6、超时处理
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(this.requestTimeout, now);
         // Reset the producer id if an expired batch has previously been sent to the broker. Also update the metrics
         // for expired batches. see the documentation of @TransactionState.resetProducerId to understand why
@@ -653,6 +656,7 @@ public class Sender implements Runnable {
     /**
      * Create a produce request from the given record batches
      */
+    // 将待发送的ProducerBatch封装成clientRequest，发送出去
     private void sendProduceRequest(long now, int destination, short acks, int timeout, List<ProducerBatch> batches) {
         if (batches.isEmpty())
             return;
